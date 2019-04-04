@@ -173,7 +173,7 @@ spec:
           args:
             - "--base-role-arn=arn:aws:iam::123456789012:role/"
             - "--iptables=true"
-            - "--host-ip=$(HOST_IP)"
+            - "--bind-ip=$(HOST_IP)"
             - "--node=$(NODE_NAME)"
           env:
             - name: HOST_IP
@@ -392,7 +392,7 @@ spec:
             - "--app-port=8181"
             - "--base-role-arn=arn:aws:iam::xxxxxxx:role/"
             - "--iptables=true"
-            - "--host-ip=$(HOST_IP)"
+            - "--bind-ip=$(HOST_IP)"
             - "--host-interface=weave"
             - "--verbose"
           env:
@@ -485,7 +485,7 @@ spec:
             - "--app-port=8181"
             - "--auto-discover-base-arn"
             - "--iptables=true"
-            - "--host-ip=$(HOST_IP)"
+            - "--bind-ip=$(HOST_IP)"
             - "--host-interface=tun0"
             - "--verbose"
           env:
@@ -557,10 +557,10 @@ Usage of kube2iam:
       --debug                                 Enable debug features
       --default-role string                   Fallback role to use when annotation is not set
       --host-interface string                 Host interface for proxying AWS metadata (default "docker0")
-      --host-ip string                        IP address of host
+      --bind-ip string                        IP address to listen on (default to 127.0.0.1)
       --iam-role-key string                   Pod annotation key used to retrieve the IAM role (default "iam.amazonaws.com/role")
       --insecure                              Kubernetes server should be accessed without verifying the TLS. Testing only
-      --iptables                              Add iptables rule (also requires --host-ip)
+      --iptables                              Add iptables rule (also requires --bind-ip)
       --log-format string                     Log format (text/json) (default "text")
       --log-level string                      Log level (default "info")
       --metadata-addr string                  Address for the ec2 metadata (default "169.254.169.254")

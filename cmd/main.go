@@ -25,14 +25,14 @@ func addFlags(s *server.Server, fs *pflag.FlagSet) {
 	fs.DurationVar(&s.IAMRoleSessionTTL, "iam-role-session-ttl", s.IAMRoleSessionTTL, "TTL for the assume role session")
 	fs.BoolVar(&s.Insecure, "insecure", false, "Kubernetes server should be accessed without verifying the TLS. Testing only")
 	fs.StringVar(&s.MetadataAddress, "metadata-addr", s.MetadataAddress, "Address for the ec2 metadata")
-	fs.BoolVar(&s.AddIPTablesRule, "iptables", false, "Add iptables rule (also requires --host-ip)")
+	fs.BoolVar(&s.AddIPTablesRule, "iptables", false, "Add iptables rule (also requires --bind-ip)")
 	fs.BoolVar(&s.AutoDiscoverBaseArn, "auto-discover-base-arn", false, "Queries EC2 Metadata to determine the base ARN")
 	fs.BoolVar(&s.AutoDiscoverDefaultRole, "auto-discover-default-role", false, "Queries EC2 Metadata to determine the default Iam Role and base ARN, cannot be used with --default-role, overwrites any previous setting for --base-role-arn")
 	fs.StringVar(&s.HostInterface, "host-interface", "docker0", "Host interface for proxying AWS metadata")
 	fs.BoolVar(&s.NamespaceRestriction, "namespace-restrictions", false, "Enable namespace restrictions")
 	fs.StringVar(&s.NamespaceRestrictionFormat, "namespace-restriction-format", s.NamespaceRestrictionFormat, "Namespace Restriction Format (glob/regexp)")
 	fs.StringVar(&s.NamespaceKey, "namespace-key", s.NamespaceKey, "Namespace annotation key used to retrieve the IAM roles allowed (value in annotation should be json array)")
-	fs.StringVar(&s.HostIP, "host-ip", s.HostIP, "IP address of host")
+	fs.StringVar(&s.BindIP, "bind-ip", s.BindIP, "IP address to listen on (default to 127.0.0.1)")
 	fs.StringVar(&s.NodeName, "node", s.NodeName, "Name of the node where kube2iam is running")
 	fs.DurationVar(&s.BackoffMaxInterval, "backoff-max-interval", s.BackoffMaxInterval, "Max interval for backoff when querying for role.")
 	fs.DurationVar(&s.BackoffMaxElapsedTime, "backoff-max-elapsed-time", s.BackoffMaxElapsedTime, "Max elapsed time for backoff when querying for role.")
@@ -106,7 +106,7 @@ func main() {
 	}
 
 	if s.AddIPTablesRule {
-		if err := iptables.AddRule(s.AppPort, s.MetadataAddress, s.HostInterface, s.HostIP); err != nil {
+		if err := iptables.AddRule(s.AppPort, s.MetadataAddress, s.HostInterface, s.BindIP); err != nil {
 			log.Fatalf("%s", err)
 		}
 	}

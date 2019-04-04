@@ -54,7 +54,7 @@ spec:
             - "--auto-discover-base-arn"
             - "--auto-discover-default-role=true"
             - "--iptables=true"
-            - "--host-ip=$(HOST_IP)"
+            - "--bind-ip=$(HOST_IP)"
             - "--node=$(NODE_NAME)"
             - "--host-interface=eni+"
           env:

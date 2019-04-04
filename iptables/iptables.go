@@ -9,14 +9,14 @@ import (
 )
 
 // AddRule adds the required rule to the host's nat table.
-func AddRule(appPort, metadataAddress, hostInterface, hostIP string) error {
+func AddRule(appPort, metadataAddress, hostInterface, bindIP string) error {
 
 	if err := checkInterfaceExists(hostInterface); err != nil {
 		return err
 	}
 
-	if hostIP == "" {
-		return errors.New("--host-ip must be set")
+	if bindIP == "0.0.0.0" {
+		return errors.New("iptables can't redirect to 0.0.0.0")
 	}
 
 	ipt, err := iptables.New()
@@ -26,7 +26,7 @@ func AddRule(appPort, metadataAddress, hostInterface, hostIP string) error {
 
 	return ipt.AppendUnique(
 		"nat", "PREROUTING", "-p", "tcp", "-d", metadataAddress, "--dport", "80",
-		"-j", "DNAT", "--to-destination", hostIP+":"+appPort, "-i", hostInterface,
+		"-j", "DNAT", "--to-destination", bindIP+":"+appPort, "-i", hostInterface,
 	)
 }
 

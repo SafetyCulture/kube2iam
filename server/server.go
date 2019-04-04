@@ -26,6 +26,7 @@ import (
 
 const (
 	defaultAppPort                    = "8181"
+	defaultBindIP                     = "127.0.0.1"
 	defaultCacheSyncAttempts          = 10
 	defaultIAMRoleKey                 = "iam.amazonaws.com/role"
 	defaultLogLevel                   = "info"
@@ -55,7 +56,7 @@ type Server struct {
 	IAMRoleSessionTTL          time.Duration
 	MetadataAddress            string
 	HostInterface              string
-	HostIP                     string
+	BindIP                     string
 	NodeName                   string
 	NamespaceKey               string
 	LogLevel                   string
@@ -249,7 +250,7 @@ func (s *Server) healthHandler(logger *log.Entry, w http.ResponseWriter, r *http
 		return
 	}
 
-	health := &HealthResponse{InstanceID: s.InstanceID, HostIP: s.HostIP}
+	health := &HealthResponse{InstanceID: s.InstanceID, HostIP: s.BindIP}
 	w.Header().Add("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(health); err != nil {
 		log.Errorf("Error sending json %+v", err)
@@ -381,14 +382,14 @@ func (s *Server) Run(host, token, nodeName string, insecure bool) error {
 	if s.MetricsPort == s.AppPort {
 		r.Handle("/metrics", metrics.GetHandler())
 	} else {
-		metrics.StartMetricsServer(s.MetricsPort)
+		metrics.StartMetricsServer(s.BindIP, s.MetricsPort)
 	}
 
 	// This has to be registered last so that it catches fall-throughs
 	r.Handle("/{path:.*}", newAppHandler("reverseProxyHandler", s.reverseProxyHandler))
 
-	log.Infof("Listening on port %s", s.AppPort)
-	if err := http.ListenAndServe(":"+s.AppPort, r); err != nil {
+	log.Infof("Listening on  %s:%s", s.BindIP, s.AppPort)
+	if err := http.ListenAndServe(s.BindIP+":"+s.AppPort, r); err != nil {
 		log.Fatalf("Error creating kube2iam http server: %+v", err)
 	}
 	return nil
@@ -398,6 +399,7 @@ func (s *Server) Run(host, token, nodeName string, insecure bool) error {
 func NewServer() *Server {
 	return &Server{
 		AppPort:                    defaultAppPort,
+		BindIP:                     defaultBindIP,
 		MetricsPort:                defaultAppPort,
 		BackoffMaxElapsedTime:      defaultMaxElapsedTime,
 		IAMRoleKey:                 defaultIAMRoleKey,
