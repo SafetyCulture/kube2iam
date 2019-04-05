@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -117,12 +118,13 @@ func init() {
 
 // StartMetricsServer registers a prometheus /metrics handler and starts a HTTP server
 // listening on the provided port to service it.
-func StartMetricsServer(listenAddress string, metricsPort string) {
+func StartMetricsServer(metricsAddr string, metricsPort int) {
+	listenAddress := fmt.Sprintf("%s:%d", metricsAddr, metricsPort)
 	r := mux.NewRouter()
 	r.Handle("/metrics", GetHandler())
 
 	go func() {
-		if err := http.ListenAndServe(listenAddress+":"+metricsPort, r); err != nil {
+		if err := http.ListenAndServe(listenAddress, r); err != nil {
 			log.Fatalf("Error creating metrics http server: %+v", err)
 		}
 	}()

@@ -2,15 +2,43 @@ package iptables
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 
 	"github.com/coreos/go-iptables/iptables"
+	log "github.com/sirupsen/logrus"
 )
 
-// AddRule adds the required rule to the host's nat table.
-func AddRule(appPort, metadataAddress, hostInterface, bindIP string) error {
+const kube2iamIptableChain = "PREROUTING_KUBE2IAM"
 
+// ClearRules clear the kube2iam iptable chain and kube2iam.
+func ClearRules() error {
+	ipt, err := iptables.New()
+	if err != nil {
+		return err
+	}
+	log.WithField("chain", kube2iamIptableChain).Info("Clearing kube2iam iptable chain")
+	return ipt.ClearChain("nat", kube2iamIptableChain)
+}
+
+// ClearChain remove the kube2iam iptable chain.
+func ClearChain() error {
+	ipt, err := iptables.New()
+	if err != nil {
+		return err
+	}
+
+	if err = ClearRules(); err != nil {
+		return err
+	}
+	log.WithField("chain", kube2iamIptableChain).Debug("Removing kube2iam iptable chain")
+	return ipt.DeleteChain("nat", kube2iamIptableChain)
+}
+
+// AddRule adds the required rule to the host's nat table.
+func AddRule(appPort int, metadataAddress, hostInterface, bindIP string) error {
+	dstAddr := fmt.Sprintf("%s:%d", bindIP, appPort)
 	if err := checkInterfaceExists(hostInterface); err != nil {
 		return err
 	}
@@ -24,9 +52,10 @@ func AddRule(appPort, metadataAddress, hostInterface, bindIP string) error {
 		return err
 	}
 
+	log.WithField("chain", kube2iamIptableChain).Debug("Adding kube2iam iptable rule")
 	return ipt.AppendUnique(
-		"nat", "PREROUTING", "-p", "tcp", "-d", metadataAddress, "--dport", "80",
-		"-j", "DNAT", "--to-destination", bindIP+":"+appPort, "-i", hostInterface,
+		"nat", kube2iamIptableChain, "-p", "tcp", "-d", metadataAddress, "--dport", "80",
+		"-j", "DNAT", "--to-destination", dstAddr, "-i", hostInterface,
 	)
 }
 

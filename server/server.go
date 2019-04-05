@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,19 +26,8 @@ import (
 )
 
 const (
-	defaultAppPort                    = "8181"
-	defaultBindIP                     = "127.0.0.1"
-	defaultCacheSyncAttempts          = 10
-	defaultIAMRoleKey                 = "iam.amazonaws.com/role"
-	defaultLogLevel                   = "info"
-	defaultLogFormat                  = "text"
-	defaultMaxElapsedTime             = 2 * time.Second
-	defaultIAMRoleSessionTTL          = 15 * time.Minute
-	defaultMaxInterval                = 1 * time.Second
-	defaultMetadataAddress            = "169.254.169.254"
-	defaultNamespaceKey               = "iam.amazonaws.com/allowed-roles"
-	defaultNamespaceRestrictionFormat = "glob"
-	healthcheckInterval               = 30 * time.Second
+	defaultCacheSyncAttempts = 10
+	healthcheckInterval      = 30 * time.Second
 )
 
 // Keeps track of the names of registered handlers for metric value/label initialization
@@ -46,39 +36,23 @@ var registeredHandlerNames []string
 // Server encapsulates all of the parameters necessary for starting up
 // the server. These can either be set via command line or directly.
 type Server struct {
-	APIServer                  string
-	APIToken                   string
-	AppPort                    string
-	MetricsPort                string
-	BaseRoleARN                string
-	DefaultIAMRole             string
-	IAMRoleKey                 string
-	IAMRoleSessionTTL          time.Duration
-	MetadataAddress            string
-	HostInterface              string
-	BindIP                     string
-	NodeName                   string
-	NamespaceKey               string
-	LogLevel                   string
-	LogFormat                  string
-	NamespaceRestrictionFormat string
-	UseRegionalStsEndpoint     bool
-	AddIPTablesRule            bool
-	AutoDiscoverBaseArn        bool
-	AutoDiscoverDefaultRole    bool
-	Debug                      bool
-	Insecure                   bool
-	NamespaceRestriction       bool
-	Verbose                    bool
-	Version                    bool
-	iam                        *iam.Client
-	k8s                        *k8s.Client
-	roleMapper                 *mappings.RoleMapper
-	BackoffMaxElapsedTime      time.Duration
-	BackoffMaxInterval         time.Duration
-	InstanceID                 string
-	HealthcheckFailReason      string
-	healthcheckTicker          *time.Ticker
+	iamRoleKey            string
+	iamRoleSessionTTL     time.Duration
+	backoffMaxInterval    time.Duration
+	backoffMaxElapsedTime time.Duration
+	metadataAddress       string
+	namespaceKey          string
+	instanceID            string
+	appPort               int
+	metricsPort           int
+	metricsBindIP         string
+	bindIP                string
+	debug                 bool
+	iam                   *iam.Client
+	k8s                   *k8s.Client
+	roleMapper            *mappings.RoleMapper
+	healthcheckTicker     *time.Ticker
+	HealthcheckFailReason string
 }
 
 type appHandlerFunc func(*log.Entry, http.ResponseWriter, *http.Request)
@@ -163,6 +137,74 @@ func parseRemoteAddr(addr string) string {
 	return hostname
 }
 
+// NewServer will create a new Server with default values.
+func NewServer(config *Config) (error, *Server) {
+	k, err := k8s.NewClient(config.APIServer, config.APIToken, config.APIToken, config.Insecure)
+	if err != nil {
+		return err, nil
+	}
+
+	iamClient := iam.NewClient(config.BaseRoleARN, config.UseRegionalStsEndpoint)
+	log.Debugln("Caches have been synced.  Proceeding with server.")
+	roleMapper := mappings.NewRoleMapper(config.IAMRoleKey, config.DefaultIAMRole, config.NamespaceRestriction, config.NamespaceKey, iamClient, k, config.NamespaceRestrictionFormat)
+
+	if config.BaseRoleARN != "" {
+		if !iam.IsValidBaseARN(config.BaseRoleARN) {
+			return fmt.Errorf("invalid --base-role-arn specified, expected: %s", iam.ARNRegexp.String()), nil
+		}
+		if !strings.HasSuffix(config.BaseRoleARN, "/") {
+			config.BaseRoleARN += "/"
+		}
+	}
+
+	if config.AutoDiscoverBaseArn {
+		if config.BaseRoleARN != "" {
+			return fmt.Errorf("--auto-discover-base-arn cannot be used if --base-role-arn is specified"), nil
+		}
+		arn, err := iam.GetBaseArn()
+		if err != nil {
+			return fmt.Errorf("%s", err), nil
+		}
+		log.WithField("arn", arn).Info("base ARN autodetected")
+		config.BaseRoleARN = arn
+	}
+
+	if config.AutoDiscoverDefaultRole {
+		if config.DefaultIAMRole != "" {
+			return fmt.Errorf("you cannot use --default-role and --auto-discover-default-role at the same time"), nil
+		}
+		arn, err := iam.GetBaseArn()
+		if err != nil {
+			return fmt.Errorf("%s", err), nil
+		}
+		config.BaseRoleARN = arn
+		instanceIAMRole, err := iam.GetInstanceIAMRole()
+		if err != nil {
+			return fmt.Errorf("%s", err), nil
+		}
+		config.DefaultIAMRole = instanceIAMRole
+		log.WithFields(log.Fields{"baseArn": config.BaseRoleARN, "defaultIAMRole": config.DefaultIAMRole}).Info("Using instance IAMRole as default")
+	}
+
+	return nil, &Server{
+		k8s:                   k,
+		iam:                   iamClient,
+		roleMapper:            roleMapper,
+		bindIP:                config.BindIP,
+		appPort:               config.AppPort,
+		metricsBindIP:         config.MetricsBindIP,
+		metricsPort:           config.MetricsPort,
+		debug:                 config.Debug,
+		namespaceKey:          config.NamespaceKey,
+		iamRoleKey:            config.IAMRoleKey,
+		iamRoleSessionTTL:     config.IAMRoleSessionTTL,
+		metadataAddress:       config.MetadataAddress,
+		backoffMaxElapsedTime: config.BackoffMaxElapsedTime,
+		backoffMaxInterval:    config.BackoffMaxInterval,
+		HealthcheckFailReason: "Healthcheck not yet performed",
+	}
+}
+
 func (s *Server) getRoleMapping(IP string) (*mappings.RoleMappingResult, error) {
 	var roleMapping *mappings.RoleMappingResult
 	var err error
@@ -172,8 +214,8 @@ func (s *Server) getRoleMapping(IP string) (*mappings.RoleMappingResult, error) 
 	}
 
 	expBackoff := backoff.NewExponentialBackOff()
-	expBackoff.MaxInterval = s.BackoffMaxInterval
-	expBackoff.MaxElapsedTime = s.BackoffMaxElapsedTime
+	expBackoff.MaxInterval = s.backoffMaxInterval
+	expBackoff.MaxElapsedTime = s.backoffMaxElapsedTime
 
 	err = backoff.Retry(operation, expBackoff)
 	if err != nil {
@@ -213,7 +255,7 @@ func (s *Server) doHealthcheck() {
 		metrics.HealthcheckStatus.Set(healthcheckResult)
 	}()
 
-	resp, err := http.Get(fmt.Sprintf("http://%s/latest/meta-data/instance-id", s.MetadataAddress))
+	resp, err := http.Get(fmt.Sprintf("http://%s/latest/meta-data/instance-id", s.metadataAddress))
 	if err != nil {
 		errMsg = fmt.Sprintf("Error getting instance id %+v", err)
 		log.Errorf(errMsg)
@@ -231,7 +273,7 @@ func (s *Server) doHealthcheck() {
 		log.Errorf(errMsg)
 		return
 	}
-	s.InstanceID = string(instanceID)
+	s.instanceID = string(instanceID)
 }
 
 // HealthResponse represents a response for the health check.
@@ -250,7 +292,7 @@ func (s *Server) healthHandler(logger *log.Entry, w http.ResponseWriter, r *http
 		return
 	}
 
-	health := &HealthResponse{InstanceID: s.InstanceID, HostIP: s.BindIP}
+	health := &HealthResponse{InstanceID: s.instanceID, HostIP: s.bindIP}
 	w.Header().Add("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(health); err != nil {
 		log.Errorf("Error sending json %+v", err)
@@ -312,7 +354,7 @@ func (s *Server) roleHandler(logger *log.Entry, w http.ResponseWriter, r *http.R
 		return
 	}
 
-	credentials, err := s.iam.AssumeRole(wantedRoleARN, remoteIP, s.IAMRoleSessionTTL)
+	credentials, err := s.iam.AssumeRole(wantedRoleARN, remoteIP, s.iamRoleSessionTTL)
 	if err != nil {
 		roleLogger.Errorf("Error assuming role %+v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -327,9 +369,9 @@ func (s *Server) roleHandler(logger *log.Entry, w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) reverseProxyHandler(logger *log.Entry, w http.ResponseWriter, r *http.Request) {
-	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: s.MetadataAddress})
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: s.metadataAddress})
 	proxy.ServeHTTP(w, r)
-	logger.WithField("metadata.url", s.MetadataAddress).Debug("Proxy ec2 metadata request")
+	logger.WithField("metadata.url", s.metadataAddress).Debug("Proxy ec2 metadata request")
 }
 
 func write(logger *log.Entry, w http.ResponseWriter, s string) {
@@ -339,17 +381,9 @@ func write(logger *log.Entry, w http.ResponseWriter, s string) {
 }
 
 // Run runs the specified Server.
-func (s *Server) Run(host, token, nodeName string, insecure bool) error {
-	k, err := k8s.NewClient(host, token, nodeName, insecure)
-	if err != nil {
-		return err
-	}
-	s.k8s = k
-	s.iam = iam.NewClient(s.BaseRoleARN, s.UseRegionalStsEndpoint)
-	log.Debugln("Caches have been synced.  Proceeding with server.")
-	s.roleMapper = mappings.NewRoleMapper(s.IAMRoleKey, s.DefaultIAMRole, s.NamespaceRestriction, s.NamespaceKey, s.iam, s.k8s, s.NamespaceRestrictionFormat)
-	podSynched := s.k8s.WatchForPods(kube2iam.NewPodHandler(s.IAMRoleKey))
-	namespaceSynched := s.k8s.WatchForNamespaces(kube2iam.NewNamespaceHandler(s.NamespaceKey))
+func (s *Server) Init() error {
+	podSynched := s.k8s.WatchForPods(kube2iam.NewPodHandler(s.iamRoleKey))
+	namespaceSynched := s.k8s.WatchForNamespaces(kube2iam.NewNamespaceHandler(s.namespaceKey))
 
 	synced := false
 	for i := 0; i < defaultCacheSyncAttempts && !synced; i++ {
@@ -357,18 +391,21 @@ func (s *Server) Run(host, token, nodeName string, insecure bool) error {
 	}
 
 	if !synced {
-		log.Fatalf("Attempted to wait for caches to be synced for %d however it is not done.  Giving up.", defaultCacheSyncAttempts)
-	} else {
-		log.Debugln("Caches have been synced.  Proceeding with server.")
+		return fmt.Errorf("attempted to wait for caches to be synced for %d however it is not done.  Giving up.", defaultCacheSyncAttempts)
 	}
+	log.Debugln("Caches have been synced.  Proceeding with server.")
 
 	// Begin healthchecking
 	s.beginPollHealthcheck(healthcheckInterval)
+	return nil
+}
 
+// Run runs the specified Server.
+func (s *Server) Serve(ctx context.Context) error {
 	r := mux.NewRouter()
 	securityHandler := newAppHandler("securityCredentialsHandler", s.securityCredentialsHandler)
 
-	if s.Debug {
+	if s.debug {
 		// This is a potential security risk if enabled in some clusters, hence the flag
 		r.Handle("/debug/store", newAppHandler("debugStoreHandler", s.debugStoreHandler))
 	}
@@ -379,37 +416,39 @@ func (s *Server) Run(host, token, nodeName string, insecure bool) error {
 		newAppHandler("roleHandler", s.roleHandler))
 	r.Handle("/healthz", newAppHandler("healthHandler", s.healthHandler))
 
-	if s.MetricsPort == s.AppPort {
+	if s.metricsPort == s.appPort && s.metricsBindIP == s.bindIP {
 		r.Handle("/metrics", metrics.GetHandler())
 	} else {
-		metrics.StartMetricsServer(s.BindIP, s.MetricsPort)
+		metrics.StartMetricsServer(s.metricsBindIP, s.metricsPort)
 	}
 
 	// This has to be registered last so that it catches fall-throughs
 	r.Handle("/{path:.*}", newAppHandler("reverseProxyHandler", s.reverseProxyHandler))
 
-	log.Infof("Listening on  %s:%s", s.BindIP, s.AppPort)
-	if err := http.ListenAndServe(s.BindIP+":"+s.AppPort, r); err != nil {
-		log.Fatalf("Error creating kube2iam http server: %+v", err)
+	errs := make(chan error)
+	listeningAddr := fmt.Sprintf("%s:%d", s.bindIP, s.appPort)
+	server := &http.Server{
+		Addr:         listeningAddr,
+		Handler:      r,
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
+	go func() {
+		log.WithFields(log.Fields{"bindIp": s.bindIP, "appPort": s.appPort}).Info("kube2iam listening")
+		if err := server.ListenAndServe(); err != nil {
+			errs <- err
+		}
+	}()
+	select {
+	case err := <-errs:
+		return err
+
+	case <-ctx.Done():
+		log.Info("kube2iam shutting down")
+		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		return server.Shutdown(shutdown)
 	}
 	return nil
-}
-
-// NewServer will create a new Server with default values.
-func NewServer() *Server {
-	return &Server{
-		AppPort:                    defaultAppPort,
-		BindIP:                     defaultBindIP,
-		MetricsPort:                defaultAppPort,
-		BackoffMaxElapsedTime:      defaultMaxElapsedTime,
-		IAMRoleKey:                 defaultIAMRoleKey,
-		BackoffMaxInterval:         defaultMaxInterval,
-		LogLevel:                   defaultLogLevel,
-		LogFormat:                  defaultLogFormat,
-		MetadataAddress:            defaultMetadataAddress,
-		NamespaceKey:               defaultNamespaceKey,
-		NamespaceRestrictionFormat: defaultNamespaceRestrictionFormat,
-		HealthcheckFailReason:      "Healthcheck not yet performed",
-		IAMRoleSessionTTL:          defaultIAMRoleSessionTTL,
-	}
 }
