@@ -3,7 +3,7 @@ package server
 import (
 	"time"
 
-	"github.com/pkg/errors"
+	"errors"
 )
 
 // Config encapsulates all of the parameters necessary for starting up
