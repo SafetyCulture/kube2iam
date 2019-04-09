@@ -19,15 +19,15 @@ DOCKER_BUILD_FLAGS :=
 
 setup:
 	go get -v -u github.com/Masterminds/glide
-	go get -v -u github.com/githubnemo/CompileDaemon
-	go get -v -u github.com/alecthomas/gometalinter
-	go get -v -u github.com/jstemmer/go-junit-report
-	go get -v github.com/mattn/goveralls
-	gometalinter --install --update
+	# go get -v -u github.com/githubnemo/CompileDaemon
+	# go get -v -u github.com/alecthomas/gometalinter
+	# go get -v -u github.com/jstemmer/go-junit-report
+	# go get -v github.com/mattn/goveralls
+	# gometalinter --install --update
 	glide install --strip-vendor
 
-build: *.go fmt
-	go build -o build/bin/$(ARCH)/$(BINARY_NAME) $(GOBUILD_VERSION_ARGS) github.com/jtblin/$(BINARY_NAME)/cmd
+build:
+	go build -o build/bin/$(ARCH)/$(BINARY_NAME) $(GOBUILD_VERSION_ARGS) ./cmd
 
 build-race: *.go fmt
 	go build -race -o build/bin/$(ARCH)/$(BINARY_NAME) $(GOBUILD_VERSION_ARGS) github.com/jtblin/$(BINARY_NAME)/cmd
@@ -81,7 +81,7 @@ watch:
 	CompileDaemon -color=true -build "make test"
 
 cross:
-	CGO_ENABLED=0 GOOS=linux go build -o build/bin/linux/$(BINARY_NAME) $(GOBUILD_VERSION_ARGS) -a -installsuffix cgo  github.com/jtblin/$(BINARY_NAME)/cmd
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/bin/linux/$(BINARY_NAME) $(GOBUILD_VERSION_ARGS) -a -installsuffix cgo ./cmd
 
 docker: cross
 	docker build -t $(IMAGE_NAME):$(GIT_HASH) . $(DOCKER_BUILD_FLAGS)
@@ -90,7 +90,7 @@ docker-dev: docker
 	docker tag $(IMAGE_NAME):$(GIT_HASH) $(IMAGE_NAME):dev
 	docker push $(IMAGE_NAME):dev
 
-release: check test docker
+release: docker
 	docker push $(IMAGE_NAME):$(GIT_HASH)
 	docker tag $(IMAGE_NAME):$(GIT_HASH) $(IMAGE_NAME):latest
 	docker push $(IMAGE_NAME):latest
